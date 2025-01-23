@@ -27,7 +27,7 @@ class Terminal:
                 parts = cmd.split()
                 if parts[0] == "/connections":
                     print(f"\n{Fore.CYAN}🔗 Active Connections:{Style.RESET_ALL}")
-                    for ip, count in rate_limiter.active_connections.items():
+                    for ip, count in rate_limiter.get_connections().items():
                         if count > 0:
                             print(f"  {Fore.YELLOW}{ip}{Fore.WHITE}: {Fore.GREEN}{count}{Style.RESET_ALL}")
                     print()

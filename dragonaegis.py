@@ -23,6 +23,7 @@ class DragonAegis:
         if len(self.connections[ip]) >= self.max_connections:
             return False
         self.connections[ip].append(now)
+        self.active_connections[ip] += 1
         return True
 
     def is_allowed_packet(self, ip):
@@ -80,6 +81,8 @@ class DragonAegis:
             finally:
                 await dest.drain()
                 dest.close()
+                
+
 
         client_to_backend = forward(reader, backend_writer, is_client=True)
         backend_to_client = forward(backend_reader, writer, is_client=False)
@@ -89,6 +92,9 @@ class DragonAegis:
         await writer.wait_closed()
         backend_writer.close()
         await backend_writer.wait_closed()
+        
+    def get_connections(self):
+        return self.active_connections
 
 async def main():
     backend_host = 'localhost'  
