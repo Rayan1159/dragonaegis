@@ -1,8 +1,8 @@
 import asyncio
-from collections import defaultdict
-from colorama import Fore, Back, Style, init
 import time
 
+from collections import defaultdict
+from colorama import Fore, Back, Style, init
 from src.terminal import Terminal
 
 class DragonAegis:
@@ -43,7 +43,9 @@ class DragonAegis:
         return list(self.blocked_ips)
 
     async def handle_client(reader, writer, backend_host, backend_port, rate_limiter):
-        client_ip = writer.get_extra_info('peername')[0]
+        transport = writer.transport
+        peername = transport.get_extra_info('peername')
+        client_ip = peername[0] if peername else 'unknown'
 
         if not rate_limiter.is_allowed_connection(client_ip):
             print(f"Blocked connection from {client_ip}: too many connections.")
@@ -67,6 +69,9 @@ class DragonAegis:
                         break
                     if is_client and not rate_limiter.is_allowed_packet(client_ip):
                         print(f"Blocked {client_ip} for packet spam.")
+                        break
+                    if client_ip in rate_limiter.blocked_ips:
+                        print(f"Blocked connection from {client_ip}: IP is blocked.")
                         break
                     dest.write(data)
                     await dest.drain()
@@ -102,7 +107,7 @@ async def main():
     print(f"{Fore.CYAN}🛡️ Proxy listening on: {Fore.YELLOW}0.0.0.0:{proxy_port}{Style.RESET_ALL}\n")
 
     server = await asyncio.start_server(
-        lambda r, w: rate_limiter.handle_client(r, w, backend_host, backend_port, rate_limiter),
+        lambda r, w: DragonAegis.handle_client(r, w, backend_host, backend_port, rate_limiter),
         '0.0.0.0', proxy_port
     )
     
