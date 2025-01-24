@@ -1,10 +1,15 @@
 import asyncio
 import time
 
+from io import BytesIO
+
+
 from collections import defaultdict
 from colorama import Fore, Back, Style, init
 from src.terminal import Terminal
 from src.database.DatabaseManager import DatabaseManager
+
+from src.packets.PacketHandler import PacketHandler
 
 class DragonAegis:
     def __init__(self, db_manager: DatabaseManager, max_connections=5, conn_interval=60, max_packets=100, packet_interval=1):
@@ -56,55 +61,86 @@ class DragonAegis:
         return list(self.blocked_ips)
 
     async def handle_client(reader, writer, backend_host, backend_port, rate_limiter):
-        transport = writer.transport
-        peername = transport.get_extra_info('peername')
+        peername = writer.get_extra_info('peername')
         client_ip = peername[0] if peername else 'unknown'
-
-        if not rate_limiter.is_allowed_connection(client_ip):
-            print(f"Blocked connection from {client_ip}: too many connections.")
-            writer.close()
-            await writer.wait_closed()
-            return
+        
+        # Initialize packet handler for this connection
+        packet_handler = PacketHandler()
+        backend_reader = None
+        backend_writer = None
 
         try:
+            # Connect to backend Minecraft server
             backend_reader, backend_writer = await asyncio.open_connection(backend_host, backend_port)
+            
+            # Initial handshake
+            handshake_data = await reader.read(4096)
+            backend_writer.write(handshake_data)
+            await backend_writer.drain()
+
+            # Handle login sequence
+            login_response = await backend_reader.read(4096)
+            writer.write(login_response)
+            await writer.drain()
+
+            # Handle encryption setup
+            encryption_data = await backend_reader.read(4096)
+            if encryption_data:
+                # Parse encryption request (Packet ID 0x01)
+                _, packet_id, payload = packet_handler.read_packet(encryption_data)
+                if packet_id == 0x01:
+                    # Implement proper encryption handshake here
+                    # For now, just forward the packet
+                    writer.write(encryption_data)
+                    await writer.drain()
+
+            # Set up bidirectional forwarding
+            async def forward(src, dest, handler, is_client=True):
+                try:
+                    while True:
+                        # Read packet length
+                        length_data = await src.readexactly(1)
+                        length = handler.read_varint(BytesIO(length_data))
+                        
+                        # Read full packet
+                        packet_data = await src.readexactly(length)
+                        full_packet = length_data + packet_data
+
+                        if is_client:
+                            # Handle client commands
+                            decrypted = handler.decrypt_packet(full_packet)
+                            _, packet_id, payload = handler.read_packet(decrypted)
+                            if packet_id == 0x03:  # Chat message packet
+                                message = payload.decode('utf-8')
+                                if message.startswith('/proxy'):
+                                    response = "§a[Proxy] Command executed!\n"
+                                    response_packet = handler.create_packet(0x0E, response.encode())
+                                    writer.write(handler.encrypt_packet(response_packet))
+                                    await writer.drain()
+                                    continue
+                        # Forward packet
+                        dest.write(handler.encrypt_packet(full_packet))
+                        await dest.drain()
+                except (asyncio.IncompleteReadError, ConnectionResetError):
+                    pass
+
+            # Create forwarding tasks
+            client_to_server = forward(reader, backend_writer, packet_handler, is_client=True)
+            server_to_client = forward(backend_reader, writer, packet_handler, is_client=False)
+
+            await asyncio.gather(client_to_server, server_to_client)
+
         except Exception as e:
-            print(f"Backend connection failed: {e}")
-            writer.close()
-            await writer.wait_closed()
-            return
+            print(f"Connection error ({client_ip}): {e}")
+        finally:
+            # Clean up connections properly
+            if backend_writer and not backend_writer.is_closing():
+                backend_writer.close()
+                await backend_writer.wait_closed()
+            if not writer.is_closing():
+                writer.close()
+                await writer.wait_closed()
 
-        async def forward(src, dest, is_client=True):
-            try:
-                while True:
-                    data = await src.read(4096)
-                    if not data:
-                        break
-                    if is_client and not rate_limiter.is_allowed_packet(client_ip):
-                        print(f"Blocked {client_ip} for packet spam.")
-                        break
-                    if client_ip in rate_limiter.blocked_ips:
-                        print(f"Blocked connection from {client_ip}: IP is blocked.")
-                        break
-                    dest.write(data)
-                    await dest.drain()
-            except:
-                pass
-            finally:
-                await dest.drain()
-                dest.close()
-                
-
-
-        client_to_backend = forward(reader, backend_writer, is_client=True)
-        backend_to_client = forward(backend_reader, writer, is_client=False)
-
-        await asyncio.gather(client_to_backend, backend_to_client)
-        writer.close()
-        await writer.wait_closed()
-        backend_writer.close()
-        await backend_writer.wait_closed()
-        
     def get_connections(self):
         return self.active_connections
 

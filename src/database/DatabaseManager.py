@@ -81,10 +81,11 @@ class DatabaseManager:
             async with conn.cursor() as cur:
                 await cur.execute("INSERT INTO packets (ip, server_id, timestamp) VALUES (%s, %s, %s)", (ip, server_id, time.time()))
                 
-    async def get_connection_count(self, ip: str, server_id: int):
+    async def get_connection_count(self, address: str):
+        id = await self.get_server_id(ip=address[0], port=address[1]) 
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
-                await cur.execute("SELECT COUNT(*) FROM connections WHERE ip = %s AND server_id = %s", (ip, server_id))
+                await cur.execute("SELECT COUNT(*) FROM connections WHERE ip = %s AND server_id = %s", (address[0], id))
                 return (await cur.fetchone())[0]
             
     async def get_packet_count(self, ip: str, server_id: int):
