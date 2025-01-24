@@ -25,7 +25,7 @@ class DatabaseManager:
     async def _create_tables(self):
         tables = [
             """CREATE TABLE IF NOT EXISTS blocked_ips (
-                ip VARCHAR(45) PRIMARY KEY.
+                ip VARCHAR(45) PRIMARY KEY,
                 server_id INT
             )""",
             """CREATE TABLE IF NOT EXISTS connections (
@@ -41,16 +41,78 @@ class DatabaseManager:
                 server_id INT,
                 timestamp FLOAT,
                 INDEX idx_packets (ip, timestamp)
-            )"""
-             """CREATE TABLE IF NOT EXISTS servers (
+            )""",
+            """CREATE TABLE IF NOT EXISTS servers (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 ip VARCHAR(45),
                 port INT,
                 timestamp FLOAT,
-                INDEX idx_packets (ip, timestamp)
+                INDEX idx_server (ip, timestamp)
             )"""
         ]
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
                 for table in tables:
                     await cur.execute(table)
+                    
+    async def block_ip(self, ip: str, server_id: int):
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("INSERT INTO blocked_ips (ip, server_id) VALUES (%s, %s)", (ip, server_id))
+                
+    async def unblock_ip(self, ip: str, server_id: int):
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("DELETE FROM blocked_ips WHERE ip = %s AND server_id = %s", (ip, server_id))
+                
+    async def list_blocked(self, server_id: int):
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT ip FROM blocked_ips WHERE server_id = %s", (server_id,))
+                return [row[0] async for row in cur]
+    
+    async def log_connection(self, ip: str, server_id: int):
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("INSERT INTO connections (ip, server_id, timestamp) VALUES (%s, %s, %s)", (ip, server_id, time.time()))
+                
+    async def log_packet(self, ip: str, server_id: int):
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("INSERT INTO packets (ip, server_id, timestamp) VALUES (%s, %s, %s)", (ip, server_id, time.time()))
+                
+    async def get_connection_count(self, ip: str, server_id: int):
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT COUNT(*) FROM connections WHERE ip = %s AND server_id = %s", (ip, server_id))
+                return (await cur.fetchone())[0]
+            
+    async def get_packet_count(self, ip: str, server_id: int):
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT COUNT(*) FROM packets WHERE ip = %s AND server_id = %s", (ip, server_id))
+                return (await cur.fetchone())[0]
+    
+    async def get_server_id(self, ip: str, port: int):
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT id FROM servers WHERE ip = %s AND port = %s", (ip, port))
+                return (await cur.fetchone())[0]
+            
+    async def log_server(self, ip: str, port: int):
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("INSERT INTO servers (ip, port, timestamp) VALUES (%s, %s, %s)", (ip, port, time.time()))
+            
+    async def cleanup_old_entries(self):
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                # Keep 1 hour of data for demonstration, adjust as needed
+                await cur.execute(
+                    "DELETE FROM connections WHERE timestamp < %s",
+                    (time.time() - 3600,)
+                )
+                await cur.execute(
+                    "DELETE FROM packets WHERE timestamp < %s",
+                    (time.time() - 3600,)
+                )

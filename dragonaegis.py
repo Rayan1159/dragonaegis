@@ -4,9 +4,10 @@ import time
 from collections import defaultdict
 from colorama import Fore, Back, Style, init
 from src.terminal import Terminal
+from src.database.DatabaseManager import DatabaseManager
 
 class DragonAegis:
-    def __init__(self, max_connections=5, conn_interval=60, max_packets=100, packet_interval=1):
+    def __init__(self, db_manager: DatabaseManager, max_connections=5, conn_interval=60, max_packets=100, packet_interval=1):
         self.max_connections = max_connections
         self.conn_interval = conn_interval
         self.max_packets = max_packets
@@ -16,6 +17,17 @@ class DragonAegis:
         
         self.blocked_ips = set()
         self.active_connections = defaultdict(int)
+        
+        self.db_manager = db_manager
+        self.cleanup = None
+
+    async def cleanup_task(self) -> None:
+        self.cleanup = asyncio.create_task(self._periodic_cleanup())
+        
+    async def _periodic_cleanup(self) -> None:
+         while True:
+            await self.db_manager.cleanup_old_entries()
+            await asyncio.sleep(3600)
 
     def is_allowed_connection(self, ip):
         now = time.time()
@@ -101,7 +113,17 @@ async def main():
     backend_port = 25565       
     proxy_port = 25566          
 
+    db_manager = DatabaseManager(
+        host='localhost',
+        port=3306,
+        user="aegis",
+        password="debug",
+        db="aegis"
+    )
+    await db_manager.initialize()
+
     rate_limiter = DragonAegis(
+        db_manager=db_manager,
         max_connections=5,      
         conn_interval=60,
         max_packets=100,      
@@ -117,7 +139,9 @@ async def main():
         '0.0.0.0', proxy_port
     )
     
-    terminal = Terminal()
+    terminal = Terminal(
+        db_manager=db_manager
+    )
     
     asyncio.create_task(terminal.terminal_loop(rate_limiter))
 
