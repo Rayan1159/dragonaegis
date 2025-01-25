@@ -5,6 +5,7 @@ from collections import defaultdict
 from colorama import Fore, Back, Style, init
 from src.terminal import Terminal
 from src.database.DatabaseManager import DatabaseManager
+from src.packets.PacketHandler import PacketHandler
 
 class DragonAegis:
     def __init__(self, db_manager: DatabaseManager, max_connections=5, conn_interval=60, max_packets=100, packet_interval=1):
@@ -60,6 +61,11 @@ class DragonAegis:
         peername = transport.get_extra_info('peername')
         client_ip = peername[0] if peername else 'unknown'
 
+        # Initialize connection tracking
+        client_state = "handshake"
+        buffer = bytearray()
+        username = None
+
         if not rate_limiter.is_allowed_connection(client_ip):
             print(f"Blocked connection from {client_ip}: too many connections.")
             writer.close()
@@ -74,36 +80,134 @@ class DragonAegis:
             await writer.wait_closed()
             return
 
+        def parse_varint(data):
+            value = 0
+            length = 0
+            for i in range(min(len(data), 5)):  # Ensure we don't read beyond the buffer
+                byte = data[i]
+                value |= (byte & 0x7F) << (7 * i)
+                length += 1
+                if (byte & 0x80) == 0:
+                    break
+            return value, length
+
+        def parse_handshake(payload):
+            offset = 0
+            print(f"Raw handshake packet: {buffer.hex()}")
+            # Protocol version
+            if len(payload) < offset + 1:
+                raise ValueError("Incomplete handshake packet")
+            proto_version, proto_bytes = parse_varint(payload[offset:])
+            offset += proto_bytes
+            # Server address
+            if len(payload) < offset + 1:
+                raise ValueError("Incomplete handshake packet")
+            addr_length = payload[offset]
+            offset += 1
+            if len(payload) < offset + addr_length:
+                raise ValueError("Incomplete handshake packet")
+            server_addr = payload[offset:offset+addr_length].decode('utf-8')
+            offset += addr_length
+            # Port
+            if len(payload) < offset + 2:
+                raise ValueError("Incomplete handshake packet")
+            port = int.from_bytes(payload[offset:offset+2], byteorder='big')
+            offset += 2
+            # Next state
+            if len(payload) < offset + 1:
+                raise ValueError("Incomplete handshake packet")
+            next_state, _ = parse_varint(payload[offset:])
+            return next_state
+
+        def parse_login_start(payload):
+            username_length = payload[0]
+            return payload[1:1+username_length].decode('utf-8')
+
         async def forward(src, dest, is_client=True):
+            nonlocal client_state, buffer, username
             try:
                 while True:
                     data = await src.read(4096)
                     if not data:
                         break
-                    if is_client and not rate_limiter.is_allowed_packet(client_ip):
-                        print(f"Blocked {client_ip} for packet spam.")
-                        break
-                    if client_ip in rate_limiter.blocked_ips:
-                        print(f"Blocked connection from {client_ip}: IP is blocked.")
-                        break
-                    dest.write(data)
-                    await dest.drain()
-            except:
-                pass
+
+                    if is_client:
+                        buffer.extend(data)
+                        while True:
+                            if len(buffer) < 1:
+                                break
+
+                            try:
+                                # Parse packet length
+                                length, length_bytes = parse_varint(buffer)
+                                total_length = length_bytes + length
+
+                                if len(buffer) < total_length:
+                                    print(f"Waiting for more data (expected {total_length} bytes, got {len(buffer)})")
+                                    break  # Wait for more data
+
+                                # Extract full packet
+                                packet = bytes(buffer[:total_length])
+                                del buffer[:total_length]  # Remove processed data
+
+                                # Log raw packet for debugging
+                                print(f"Raw packet: {packet.hex()}")
+
+                                # Parse packet ID
+                                packet_id, id_bytes = parse_varint(packet[length_bytes:])
+                                payload = packet[length_bytes + id_bytes:]
+
+                                # Rate limiting checks
+                                if not rate_limiter.is_allowed_packet(client_ip):
+                                    print(f"Blocked {client_ip} for packet spam.")
+                                    return
+
+                                if client_ip in rate_limiter.blocked_ips:
+                                    print(f"Blocked connection from {client_ip}: IP is blocked.")
+                                    return
+
+                                # State machine
+                                if client_state == "handshake":
+                                    if packet_id == 0x00:  # Handshake packet
+                                        print(f"Handshake packet detected: {payload.hex()}")
+                                        next_state = parse_handshake(payload)
+                                        if next_state == 2:
+                                            client_state = "login"
+                                elif client_state == "login":
+                                    if packet_id == 0x00:  # Login Start
+                                        username = parse_login_start(payload)
+                                        print(f"Player {username} ({client_ip}) is connecting!")
+                                        client_state = "play"
+                                elif client_state == "play":
+                                    if packet_id == 0x07:  # Chat packet (example)
+                                        print(f"Chat message from {username}: {payload[1:].decode('utf-8')}")
+
+                                # Forward the original packet
+                                dest.write(packet)
+                                await dest.drain()
+
+                            except ValueError as e:
+                                print(f"Packet parsing error: {e}")
+                                break  # Skip malformed packet and wait for more data
+
+                    else:
+                        # Forward server responses directly
+                        dest.write(data)
+                        await dest.drain()
+            except Exception as e:
+                print(f"Forwarding error: {e}")
             finally:
-                await dest.drain()
                 dest.close()
-                
+                await dest.wait_closed()
+        # Start forwarding tasks
+        client_to_server = forward(reader, backend_writer, is_client=True)
+        server_to_client = forward(backend_reader, writer, is_client=False)
+        
+        await asyncio.gather(client_to_server, server_to_client)
 
-
-        client_to_backend = forward(reader, backend_writer, is_client=True)
-        backend_to_client = forward(backend_reader, writer, is_client=False)
-
-        await asyncio.gather(client_to_backend, backend_to_client)
+        # Cleanup
         writer.close()
         await writer.wait_closed()
-        backend_writer.close()
-        await backend_writer.wait_closed()
         
     def get_connections(self):
         return self.active_connections
