@@ -6,9 +6,10 @@ from colorama import Fore, Back, Style, init
 from src.terminal import Terminal
 from src.database.DatabaseManager import DatabaseManager
 from src.packets.PacketHandler import PacketHandler
+import argparse
 
 class DragonAegis:
-    def __init__(self, db_manager: DatabaseManager, max_connections=5, conn_interval=60, max_packets=100, packet_interval=1):
+    def __init__(self, db_manager: DatabaseManager, log_packets=False, max_connections=5, conn_interval=60, max_packets=100, packet_interval=1):
         self.max_connections = max_connections
         self.conn_interval = conn_interval
         self.max_packets = max_packets
@@ -21,6 +22,7 @@ class DragonAegis:
         
         self.db_manager = db_manager
         self.cleanup = None
+        self.log_packets = log_packets
 
     async def cleanup_task(self) -> None:
         self.cleanup = asyncio.create_task(self._periodic_cleanup())
@@ -61,7 +63,6 @@ class DragonAegis:
         peername = transport.get_extra_info('peername')
         client_ip = peername[0] if peername else 'unknown'
 
-        # Initialize connection tracking
         client_state = "handshake"
         buffer = bytearray()
         username = None
@@ -83,7 +84,7 @@ class DragonAegis:
         def parse_varint(data):
             value = 0
             length = 0
-            for i in range(min(len(data), 5)):  # Ensure we don't read beyond the buffer
+            for i in range(min(len(data), 5)):
                 byte = data[i]
                 value |= (byte & 0x7F) << (7 * i)
                 length += 1
@@ -93,13 +94,10 @@ class DragonAegis:
 
         def parse_handshake(payload):
             offset = 0
-            print(f"Raw handshake packet: {buffer.hex()}")
-            # Protocol version
             if len(payload) < offset + 1:
                 raise ValueError("Incomplete handshake packet")
             proto_version, proto_bytes = parse_varint(payload[offset:])
             offset += proto_bytes
-            # Server address
             if len(payload) < offset + 1:
                 raise ValueError("Incomplete handshake packet")
             addr_length = payload[offset]
@@ -108,12 +106,10 @@ class DragonAegis:
                 raise ValueError("Incomplete handshake packet")
             server_addr = payload[offset:offset+addr_length].decode('utf-8')
             offset += addr_length
-            # Port
             if len(payload) < offset + 2:
                 raise ValueError("Incomplete handshake packet")
             port = int.from_bytes(payload[offset:offset+2], byteorder='big')
             offset += 2
-            # Next state
             if len(payload) < offset + 1:
                 raise ValueError("Incomplete handshake packet")
             next_state, _ = parse_varint(payload[offset:])
@@ -138,26 +134,22 @@ class DragonAegis:
                                 break
 
                             try:
-                                # Parse packet length
                                 length, length_bytes = parse_varint(buffer)
                                 total_length = length_bytes + length
 
                                 if len(buffer) < total_length:
                                     print(f"Waiting for more data (expected {total_length} bytes, got {len(buffer)})")
-                                    break  # Wait for more data
+                                    break
 
-                                # Extract full packet
                                 packet = bytes(buffer[:total_length])
-                                del buffer[:total_length]  # Remove processed data
+                                del buffer[:total_length]
 
-                                # Log raw packet for debugging
-                                print(f"Raw packet: {packet.hex()}")
-
-                                # Parse packet ID
+                                if rate_limiter.log_packets:    
+                                    print(f"Client packet: {packet.hex()}")
+                                
                                 packet_id, id_bytes = parse_varint(packet[length_bytes:])
                                 payload = packet[length_bytes + id_bytes:]
 
-                                # Rate limiting checks
                                 if not rate_limiter.is_allowed_packet(client_ip):
                                     print(f"Blocked {client_ip} for packet spam.")
                                     return
@@ -166,32 +158,29 @@ class DragonAegis:
                                     print(f"Blocked connection from {client_ip}: IP is blocked.")
                                     return
 
-                                # State machine
                                 if client_state == "handshake":
-                                    if packet_id == 0x00:  # Handshake packet
+                                    if packet_id == 0x00:
                                         print(f"Handshake packet detected: {payload.hex()}")
                                         next_state = parse_handshake(payload)
                                         if next_state == 2:
                                             client_state = "login"
                                 elif client_state == "login":
-                                    if packet_id == 0x00:  # Login Start
+                                    if packet_id == 0x00:
                                         username = parse_login_start(payload)
                                         print(f"Player {username} ({client_ip}) is connecting!")
                                         client_state = "play"
                                 elif client_state == "play":
-                                    if packet_id == 0x07:  # Chat packet (example)
+                                    if packet_id == 0x3B:
                                         print(f"Chat message from {username}: {payload[1:].decode('utf-8')}")
-
-                                # Forward the original packet
+                                        
                                 dest.write(packet)
                                 await dest.drain()
 
                             except ValueError as e:
                                 print(f"Packet parsing error: {e}")
-                                break  # Skip malformed packet and wait for more data
+                                break
 
                     else:
-                        # Forward server responses directly
                         dest.write(data)
                         await dest.drain()
             except Exception as e:
@@ -199,13 +188,12 @@ class DragonAegis:
             finally:
                 dest.close()
                 await dest.wait_closed()
-        # Start forwarding tasks
+
         client_to_server = forward(reader, backend_writer, is_client=True)
         server_to_client = forward(backend_reader, writer, is_client=False)
         
         await asyncio.gather(client_to_server, server_to_client)
 
-        # Cleanup
         writer.close()
         await writer.wait_closed()
         
@@ -215,18 +203,29 @@ class DragonAegis:
 async def main():
     backend_host = 'localhost'  
     backend_port = 25565       
-    proxy_port = 25566          
+    proxy_port = 25566         
+    
+    parser = argparse.ArgumentParser(description='DragonAegis Proxy')
+    parser.add_argument('--log-packets', type=bool, default=False, help='Log incoming packets')
+    parser.add_argument('--refresh-tables', type=bool, default=False, help='Refresh database tables')
+
+    args = parser.parse_args()
+
+    log_packets = args.log_packets
+    refresh_tables = args.refresh_tables
 
     db_manager = DatabaseManager(
         host='localhost',
         port=3306,
         user="aegis",
         password="debug",
-        db="aegis"
+        db="aegis",
+        refresh_tables=refresh_tables
     )
     await db_manager.initialize()
 
     rate_limiter = DragonAegis(
+        log_packets=log_packets,
         db_manager=db_manager,
         max_connections=5,      
         conn_interval=60,
@@ -254,4 +253,7 @@ async def main():
         await server.serve_forever()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print(f"\n{Fore.YELLOW}⚠️ Proxy shutting down...{Style.RESET_ALL}")

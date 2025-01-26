@@ -2,13 +2,14 @@ import aiomysql
 import time
 
 class DatabaseManager:
-    def __init__(self, host: str, port: int, user: str, password: str, db: str):
+    def __init__(self, host: str, port: int, user: str, password: str, db: str, refresh_tables: bool = False):
         self.host = host
         self.port = port
         self.user = user
         self.password = password
         self.db = db
         self.pool = None
+        self.refresh_tables = refresh_tables    
         
     async def initialize(self):
         self.pool = await aiomysql.create_pool(
@@ -23,37 +24,41 @@ class DatabaseManager:
         await self._create_tables()
         
     async def _create_tables(self):
-        tables = [
-            """CREATE TABLE IF NOT EXISTS blocked_ips (
-                ip VARCHAR(45) PRIMARY KEY,
-                server_id INT
-            )""",
-            """CREATE TABLE IF NOT EXISTS connections (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                ip VARCHAR(45),
-                server_id INT,
-                timestamp FLOAT,
-                INDEX idx_conn (ip, timestamp)
-            )""",
-            """CREATE TABLE IF NOT EXISTS packets (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                ip VARCHAR(45),
-                server_id INT,
-                timestamp FLOAT,
-                INDEX idx_packets (ip, timestamp)
-            )""",
-            """CREATE TABLE IF NOT EXISTS servers (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                ip VARCHAR(45),
-                port INT,
-                timestamp FLOAT,
-                INDEX idx_server (ip, timestamp)
-            )"""
-        ]
-        async with self.pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                for table in tables:
-                    await cur.execute(table)
+        if self.refresh_tables:
+            tables = [
+                """CREATE TABLE IF NOT EXISTS blocked_ips (
+                    ip VARCHAR(45) PRIMARY KEY,
+                    server_id INT
+                )""",
+                """CREATE TABLE IF NOT EXISTS connections (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    ip VARCHAR(45),
+                    server_id INT,
+                    timestamp FLOAT,
+                    INDEX idx_conn (ip, timestamp)
+                )""",
+                """CREATE TABLE IF NOT EXISTS packets (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    ip VARCHAR(45),
+                    server_id INT,
+                    timestamp FLOAT,
+                    INDEX idx_packets (ip, timestamp)
+                )""",
+                """CREATE TABLE IF NOT EXISTS servers (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    ip VARCHAR(45),
+                    port INT,
+                    timestamp FLOAT,
+                    handshakes INT,
+                    INDEX idx_server (ip, timestamp)
+                )"""
+            ]
+            async with self.pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    for table in tables:
+                        await cur.execute(table)
+        else:
+            print("Skipping table creation, refresh_tables is False")
                     
     async def block_ip(self, ip: str, server_id: int):
         async with self.pool.acquire() as conn:
@@ -116,4 +121,12 @@ class DatabaseManager:
                 await cur.execute(
                     "DELETE FROM packets WHERE timestamp < %s",
                     (time.time() - 3600,)
+                )
+
+    async def increment_handshakes(self, ip: str, port: int):
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "UPDATE servers SET handshakes = handshakes + 1 WHERE ip = %s AND port = %s",
+                    (ip, port)
                 )
