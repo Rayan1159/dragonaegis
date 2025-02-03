@@ -1,12 +1,11 @@
 import asyncio
 import time
+import argparse
 
 from collections import defaultdict
 from colorama import Fore, Back, Style, init
-from src.terminal import Terminal
+from src.terminal.terminal import Terminal
 from src.database.DatabaseManager import DatabaseManager
-from src.packets.PacketHandler import PacketHandler
-import argparse
 
 class DragonAegis:
     def __init__(self, db_manager: DatabaseManager, log_packets=False, max_connections=5, conn_interval=60, max_packets=100, packet_interval=1):
@@ -96,7 +95,8 @@ class DragonAegis:
             offset = 0
             if len(payload) < offset + 1:
                 raise ValueError("Incomplete handshake packet")
-            proto_version, proto_bytes = parse_varint(payload[offset:])
+            
+            proto_version,proto_bytes = parse_varint(payload[offset:])
             offset += proto_bytes
             if len(payload) < offset + 1:
                 raise ValueError("Incomplete handshake packet")
@@ -137,10 +137,6 @@ class DragonAegis:
                                 length, length_bytes = parse_varint(buffer)
                                 total_length = length_bytes + length
 
-                                if len(buffer) < total_length:
-                                    print(f"Waiting for more data (expected {total_length} bytes, got {len(buffer)})")
-                                    break
-
                                 packet = bytes(buffer[:total_length])
                                 del buffer[:total_length]
 
@@ -170,7 +166,7 @@ class DragonAegis:
                                         print(f"Player {username} ({client_ip}) is connecting!")
                                         client_state = "play"
                                 elif client_state == "play":
-                                    if packet_id == 0x07:
+                                    if packet_id == 0x3B:
                                         print(f"Chat message from {username}: {payload[1:].decode('utf-8')}")
                                         
                                 dest.write(packet)
@@ -202,8 +198,8 @@ class DragonAegis:
 
 async def main():
     backend_host = 'localhost'  
-    backend_port = 25565       
-    proxy_port = 25566         
+    backend_port = 25566  
+    proxy_port = 25565        
     
     parser = argparse.ArgumentParser(description='DragonAegis Proxy')
     parser.add_argument('--log-packets', type=bool, default=False, help='Log incoming packets')
@@ -218,7 +214,7 @@ async def main():
         host='localhost',
         port=3306,
         user="aegis",
-        password="debug",
+        password="Runescapex@1#12",
         db="aegis",
         refresh_tables=refresh_tables
     )
