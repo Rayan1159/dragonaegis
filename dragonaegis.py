@@ -166,8 +166,7 @@ class DragonAegis:
                                         print(f"Player {username} ({client_ip}) is connecting!")
                                         client_state = "play"
                                 elif client_state == "play":
-                                    if packet_id == 0x3B:
-                                        print(f"Chat message from {username}: {payload[1:].decode('utf-8')}")
+                                    pass
                                         
                                 dest.write(packet)
                                 await dest.drain()
