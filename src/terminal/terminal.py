@@ -8,7 +8,6 @@ import aioconsole
 
 class Terminal:
     def __init__(self, db_manager: DatabaseManager):
-        self.server_selected = None
         self.db_manager = db_manager
         self._timeout_task = None
         self.session_timeout = 15 # 15 minutes in seconds
@@ -35,6 +34,7 @@ class Terminal:
     async def terminal_loop(self, rate_limiter):
         help_text = f"""
             {Fore.CYAN}📖 Available Commands:{Style.RESET_ALL}
+            {Fore.GREEN}/allow-con <true>:<false>{Fore.WHITE} - Allows or disallows all connections to the selected server
             {Fore.GREEN}/connections{Fore.WHITE}    - Show active connections
             {Fore.GREEN}/block <IP>{Fore.WHITE}     - Block an IP address
             {Fore.GREEN}/unblock <IP>{Fore.WHITE}   - Unblock an IP address
@@ -45,7 +45,7 @@ class Terminal:
 
         while True:
             prompt = (f"{Fore.BLUE}⚡ {Style.BRIGHT}Proxy{Fore.CYAN}»{Style.RESET_ALL} "
-                      if self.server_selected is not None
+                      if rate_limiter.server_selected is not None
                       else f"{Fore.BLUE}⚡ {Style.BRIGHT}No server selected{Fore.RED}»{Style.RESET_ALL} ")
             try:
                 cmd = await aioconsole.ainput(prompt)
@@ -54,12 +54,11 @@ class Terminal:
 
                 parts = cmd.split()
                 
-                if self.server_selected is not None:
+                if rate_limiter.server_selected is not None:
                     if parts[0] == "/connections":
                         print(f"\n{Fore.CYAN}🔗 Active Connections:{Style.RESET_ALL}")
-                        print(await self.db_manager.get_connection_count(self.server_selected.split(":")))
+                        print(await self.db_manager.get_connection_count(rate_limiter.server_selected.split(":")))
                         await self._reset_session_timeout()
-                    
                     elif parts[0] == "/block" and len(parts) > 1:
                         rate_limiter.block_ip(parts[1])
                         print(f"{Fore.RED}🔒 Blocked {Fore.YELLOW}{parts[1]}{Style.RESET_ALL}")
@@ -82,6 +81,13 @@ class Terminal:
                         print(help_text)
                         await self._reset_session_timeout()
                     
+                    elif parts[0] == "/allow-con":
+                        if parts[1] == "true":
+                            print(f"\n{Fore.CYAN}🔓 Allowing all connections to server {rate_limiter.server_selected}...{Style.RESET_ALL}")
+                            rate_limiter.allowed_connection = True
+                        elif parts[1] == "false":
+                            print(f"\n{Fore.RED}🔒 Blocking all connections to server {rate_limiter.server_selected}...{Style.RESET_ALL}")
+                            rate_limiter.allowed_connection = False
                     elif parts[0] == "/exit":
                         print(f"\n{Fore.MAGENTA}🌸 Shutting down proxy...{Style.RESET_ALL}")
                         exit(0)
@@ -94,8 +100,8 @@ class Terminal:
                             continue
                         server_address = parts[1]
                         if ":" in server_address:
-                            self.server_selected = server_address
-                            print(f"{Fore.GREEN}🎯 Selected server: {Fore.YELLOW}{self.server_selected}{Style.RESET_ALL}")
+                            rate_limiter.server_selected = server_address
+                            print(f"{Fore.GREEN}🎯 Selected server: {Fore.YELLOW}{rate_limiter.server_selected}{Style.RESET_ALL}")
                             await self._reset_session_timeout()
                         else:
                             print(f"{Fore.RED}❌ Invalid IP format. Use <ip>:<port>{Style.RESET_ALL}")

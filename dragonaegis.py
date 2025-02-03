@@ -16,12 +16,18 @@ class DragonAegis:
         self.connections = defaultdict(list)
         self.packets = defaultdict(list)
         
+        self.allowed_connection = True # Allow connections to server by default
+        
         self.blocked_ips = set()
-        self.active_connections = defaultdict(int)
         
         self.db_manager = db_manager
         self.cleanup = None
         self.log_packets = log_packets
+        
+        self.active_connections = defaultdict(int)
+        
+        self.server_selected = None
+
 
     async def cleanup_task(self) -> None:
         self.cleanup = asyncio.create_task(self._periodic_cleanup())
@@ -48,15 +54,6 @@ class DragonAegis:
         self.packets[ip].append(now)
         return True
 
-    def block_ip(self, ip):
-        self.blocked_ips.add(ip)
-
-    def unblock_ip(self, ip):
-        self.blocked_ips.discard(ip)
-
-    def list_blocked(self):
-        return list(self.blocked_ips)
-
     async def handle_client(reader, writer, backend_host, backend_port, rate_limiter):
         transport = writer.transport
         peername = transport.get_extra_info('peername')
@@ -71,7 +68,12 @@ class DragonAegis:
             writer.close()
             await writer.wait_closed()
             return
-
+        
+        if rate_limiter.server_selected is not None:     
+            if not rate_limiter.allowed_connection:
+                print(f"Blocked connection from {client_ip}: connections to server are disabled.")
+                writer.close();
+            
         try:
             backend_reader, backend_writer = await asyncio.open_connection(backend_host, backend_port)
         except Exception as e:
@@ -140,9 +142,9 @@ class DragonAegis:
                                 packet = bytes(buffer[:total_length])
                                 del buffer[:total_length]
 
-                                if rate_limiter.log_packets:    
+                                if client_state == "play" and rate_limiter.log_packets:
                                     print(f"Client packet: {packet.hex()}")
-                                
+
                                 packet_id, id_bytes = parse_varint(packet[length_bytes:])
                                 payload = packet[length_bytes + id_bytes:]
 
@@ -156,17 +158,19 @@ class DragonAegis:
 
                                 if client_state == "handshake":
                                     if packet_id == 0x00:
-                                        print(f"Handshake packet detected: {payload.hex()}")
                                         next_state = parse_handshake(payload)
                                         if next_state == 2:
                                             client_state = "login"
+                                    if packet_id == 0xFE:
+                                        pass
                                 elif client_state == "login":
                                     if packet_id == 0x00:
                                         username = parse_login_start(payload)
-                                        print(f"Player {username} ({client_ip}) is connecting!")
                                         client_state = "play"
                                 elif client_state == "play":
-                                    pass
+                                    if packet_id == 0x07:
+                                        if rate_limiter.log_packets:
+                                            print(f"Chat message from {username}: {payload[1:].decode('utf-8')}")
                                         
                                 dest.write(packet)
                                 await dest.drain()
@@ -236,7 +240,7 @@ async def main():
         lambda r, w: DragonAegis.handle_client(r, w, backend_host, backend_port, rate_limiter),
         '0.0.0.0', proxy_port
     )
-    
+
     terminal = Terminal(
         db_manager=db_manager
     )
