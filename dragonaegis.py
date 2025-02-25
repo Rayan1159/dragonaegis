@@ -16,7 +16,7 @@ class DragonAegis:
         self.connections = defaultdict(list)
         self.packets = defaultdict(list)
         
-        self.allowed_connection = True # Allow connections to server by default
+        self.allowed_connection = defaultdict(lambda: (str, bool))
         
         self.blocked_ips = set()
         
@@ -70,8 +70,8 @@ class DragonAegis:
             return
         
         if rate_limiter.server_selected is not None:     
-            if not rate_limiter.allowed_connection:
-                print(f"Blocked connection from {client_ip}: connections to server are disabled.")
+            if not rate_limiter.allowed_connection(rate_limiter.server_selected):
+                print(f"Blocked connection from {client_ip}: connections to server ({rate_limiter}) are disabled.")
                 writer.close();
             
         try:
@@ -161,8 +161,6 @@ class DragonAegis:
                                         next_state = parse_handshake(payload)
                                         if next_state == 2:
                                             client_state = "login"
-                                    if packet_id == 0xFE:
-                                        pass
                                 elif client_state == "login":
                                     if packet_id == 0x00:
                                         username = parse_login_start(payload)
@@ -207,11 +205,15 @@ async def main():
     parser = argparse.ArgumentParser(description='DragonAegis Proxy')
     parser.add_argument('--log-packets', type=bool, default=False, help='Log incoming packets')
     parser.add_argument('--refresh-tables', type=bool, default=False, help='Refresh database tables')
-
+    parser.add_argument('--backend-ip', type=str, default='localhost', help='Backend server IP', required=True)
+    parser.add_argument('--backend-port', type=int, default="", help="Backend server port", required=True)
+    parser.add_argument('--server-password', type=str, help="Server password for access", required=True)
     args = parser.parse_args()
 
+    backend_ip = args.backend_ip
     log_packets = args.log_packets
     refresh_tables = args.refresh_tables
+    server_password = args.server_password
 
     db_manager = DatabaseManager(
         host='localhost',
@@ -223,7 +225,15 @@ async def main():
     )
     await db_manager.initialize()
 
-    rate_limiter = DragonAegis(
+    server = db_manager.get_server_id(backend_ip, backend_port)
+    password = db_manager.get_server_password(backend_ip, backend_port, server)
+    
+    if not password:
+        print('server has not been set. a password will be generated.')
+        return
+    
+    if password == server_password:
+        rate_limiter = DragonAegis(
         log_packets=log_packets,
         db_manager=db_manager,
         max_connections=5,      
@@ -232,24 +242,28 @@ async def main():
         packet_interval=1
     )
     
-    print(f"\n{Fore.GREEN}🚀 DragonAegis started {Style.RESET_ALL}")
-    print(f"{Fore.CYAN}📡 Forwarding to: {Fore.YELLOW}{backend_host}:{backend_port}{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}🛡️ Proxy listening on: {Fore.YELLOW}0.0.0.0:{proxy_port}{Style.RESET_ALL}\n")
+        print(f"\n{Fore.GREEN}🚀 DragonAegis started {Style.RESET_ALL}")
+        print(f"{Fore.CYAN}📡 Forwarding to: {Fore.YELLOW}{backend_ip}:{backend_port}{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}🛡️ Proxy listening on: {Fore.YELLOW}0.0.0.0:{proxy_port}{Style.RESET_ALL}\n")
 
-    server = await asyncio.start_server(
-        lambda r, w: DragonAegis.handle_client(r, w, backend_host, backend_port, rate_limiter),
-        '0.0.0.0', proxy_port
-    )
+        server = await asyncio.start_server(
+            lambda r, w: DragonAegis.handle_client(r, w, backend_host, backend_port, rate_limiter),
+            '0.0.0.0', proxy_port
+        )
 
-    terminal = Terminal(
-        db_manager=db_manager
-    )
+        terminal = Terminal(
+            db_manager=db_manager
+        )
+        
+        asyncio.create_task(terminal.terminal_loop(rate_limiter))
+
+        async with server:
+            print(f"Proxy running on port {proxy_port}...")
+            await server.serve_forever()
     
-    asyncio.create_task(terminal.terminal_loop(rate_limiter))
-
-    async with server:
-        print(f"Proxy running on port {proxy_port}...")
-        await server.serve_forever()
+    else:
+        print("invalid server password")
+    
 
 if __name__ == '__main__':
     try:

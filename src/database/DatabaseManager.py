@@ -2,7 +2,7 @@ import aiomysql
 import time
 
 class DatabaseManager:
-    def __init__(self, host: str, port: int, user: str, password: str, db: str, refresh_tables: bool = False):
+    def __init__(self, host: str, port: int, user: str, password: str, db: str, server_password: str, refresh_tables: bool = False):
         self.host = host
         self.port = port
         self.user = user
@@ -10,6 +10,7 @@ class DatabaseManager:
         self.db = db
         self.pool = None
         self.refresh_tables = refresh_tables    
+        self.server_password = server_password
         
     async def initialize(self):
         self.pool = await aiomysql.create_pool(
@@ -50,6 +51,7 @@ class DatabaseManager:
                     port INT,
                     timestamp FLOAT,
                     handshakes INT,
+                    password VARCHAR(35)
                     INDEX idx_server (ip, timestamp)
                 )"""
             ]
@@ -86,11 +88,10 @@ class DatabaseManager:
             async with conn.cursor() as cur:
                 await cur.execute("INSERT INTO packets (ip, server_id, timestamp) VALUES (%s, %s, %s)", (ip, server_id, time.time()))
                 
-    async def get_connection_count(self, address: str):
-        id = await self.get_server_id(ip=address[0], port=address[1]) 
+    async def get_connection_count(self, address: str, id: int):
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
-                await cur.execute("SELECT COUNT(*) FROM connections WHERE ip = %s AND server_id = %s", (address[0], id))
+                await cur.execute("SELECT COUNT(*) FROM connections WHERE ip = %s AND server_id = %s", (address, id))
                 return (await cur.fetchone())[0]
             
     async def get_packet_count(self, ip: str, server_id: int):
@@ -122,6 +123,15 @@ class DatabaseManager:
                     "DELETE FROM packets WHERE timestamp < %s",
                     (time.time() - 3600,)
                 )
+                
+    async def get_server_password(self, ip, port, id):
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT password FROM servers WHERE ip = % AND port = % AND id = %",
+                    (ip, port, id)
+                )
+                return (await cur.fetchone())[0]
 
     async def increment_handshakes(self, ip: str, port: int):
         async with self.pool.acquire() as conn:

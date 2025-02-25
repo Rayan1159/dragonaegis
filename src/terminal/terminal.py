@@ -56,8 +56,14 @@ class Terminal:
                 
                 if rate_limiter.server_selected is not None:
                     if parts[0] == "/connections":
+                        server_id = self.get_server()
+                        
+                        if not server_id:
+                            print("No server selected or found.")
+                            return;
+                        
                         print(f"\n{Fore.CYAN}🔗 Active Connections:{Style.RESET_ALL}")
-                        print(await self.db_manager.get_connection_count(rate_limiter.server_selected.split(":")))
+                        print(await self.db_manager.get_connection_count(rate_limiter.server_selected.split(":")[0], server_id))
                         await self._reset_session_timeout()
                     elif parts[0] == "/block" and len(parts) > 1:
                         rate_limiter.block_ip(parts[1])
@@ -77,17 +83,17 @@ class Terminal:
                         print()
                         await self._reset_session_timeout()
                     
-                    elif parts[0] == "/help":
+                    elif parts[0] == "/help":                          
                         print(help_text)
                         await self._reset_session_timeout()
                     
                     elif parts[0] == "/allow-con":
                         if parts[1] == "true":
                             print(f"\n{Fore.CYAN}🔓 Allowing all connections to server {rate_limiter.server_selected}...{Style.RESET_ALL}")
-                            rate_limiter.allowed_connection = True
+                            rate_limiter.allowed_connection(rate_limiter.server_selected) = True
                         elif parts[1] == "false":
                             print(f"\n{Fore.RED}🔒 Blocking all connections to server {rate_limiter.server_selected}...{Style.RESET_ALL}")
-                            rate_limiter.allowed_connection = False
+                            rate_limiter.allowed_connection(rate_limiter.server_selected) = False
                     elif parts[0] == "/exit":
                         print(f"\n{Fore.MAGENTA}🌸 Shutting down proxy...{Style.RESET_ALL}")
                         exit(0)
