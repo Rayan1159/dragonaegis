@@ -6,6 +6,7 @@ from collections import defaultdict
 from colorama import Fore, Back, Style, init
 from src.terminal.terminal import Terminal
 from src.database.DatabaseManager import DatabaseManager
+from src.web import http
 
 class DragonAegis:
     def __init__(self, db_manager: DatabaseManager, log_packets=False, max_connections=5, conn_interval=60, max_packets=100, packet_interval=1):
@@ -16,7 +17,7 @@ class DragonAegis:
         self.connections = defaultdict(list)
         self.packets = defaultdict(list)
         
-        self.allowed_connection = True # Allow connections to server by default
+        self.allowed_connection = True
         
         self.blocked_ips = set()
         
@@ -207,18 +208,23 @@ async def main():
     parser = argparse.ArgumentParser(description='DragonAegis Proxy')
     parser.add_argument('--log-packets', type=bool, default=False, help='Log incoming packets')
     parser.add_argument('--refresh-tables', type=bool, default=False, help='Refresh database tables')
+    parser.add_argument('--api-mode', type=bool, default=False, help="Enables the api")
 
     args = parser.parse_args()
 
     log_packets = args.log_packets
     refresh_tables = args.refresh_tables
+    enable_api = args.api_mode
+
+    if enable_api:
+        http.run()
 
     db_manager = DatabaseManager(
         host='localhost',
         port=3306,
-        user="aegis",
-        password="Runescapex@1#12",
-        db="aegis",
+        user="root",
+        password="",
+        db="dragon",
         refresh_tables=refresh_tables
     )
     await db_manager.initialize()
@@ -247,9 +253,12 @@ async def main():
     
     asyncio.create_task(terminal.terminal_loop(rate_limiter))
 
-    async with server:
-        print(f"Proxy running on port {proxy_port}...")
-        await server.serve_forever()
+    if not enable_api:
+        async with server:
+            print(f"Proxy running on port {proxy_port}...")
+            await server.serve_forever()
+    else:
+        print("unable to run socket, api is enabled")
 
 if __name__ == '__main__':
     try:
