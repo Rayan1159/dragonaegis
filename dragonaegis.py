@@ -201,11 +201,9 @@ class DragonAegis:
         return self.active_connections
 
 async def main():
-    backend_host = 'localhost'  
-    backend_port = 25566  
-    proxy_port = 25565        
-    
     parser = argparse.ArgumentParser(description='DragonAegis Proxy')
+    parser.add_argument('--target-server', type=str, default="", help="Target server to stream socket to")
+    parser.add_argument('--target-server-port', type=int, default=0, help="Target server port")
     parser.add_argument('--log-packets', type=bool, default=False, help='Log incoming packets')
     parser.add_argument('--refresh-tables', type=bool, default=False, help='Refresh database tables')
     parser.add_argument('--api-mode', type=bool, default=False, help="Enables the api")
@@ -215,6 +213,15 @@ async def main():
     log_packets = args.log_packets
     refresh_tables = args.refresh_tables
     enable_api = args.api_mode
+
+    if not args.target_server or args.target_server_port:
+        print(f"\n{Fore.RED}⚠️ Target server or port not specified {Style.RESET_ALL}")
+        exit(-1)
+
+    backend_host = args.target_server
+    backend_port = args.target_server_port
+    proxy_port = 25565
+
 
     if enable_api:
         http.run()
